@@ -94,6 +94,8 @@ The app is native Swift (AppKit and PDFKit) with no dependencies.
 
 The paper look comes from [Looseleaf](https://kevintngo.github.io/looseleaf/) (MIT): its colours, paper textures, the Kevin Sans typeface, and its felt-pen engine, ported to Swift. Page numbers use IBM Plex Mono (SIL Open Font License). Licences are in `Resources/Fonts`.
 
+Galley's sister app [Quire](https://github.com/prnil/quire) is a PDF editor in the same style.
+
 ## Licence
 
 MIT. See [LICENSE](LICENSE).
