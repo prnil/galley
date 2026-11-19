@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDisplayName</key>
+	<string>Galley</string>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>TeX Source</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>CFBundleTypeExtensions</key>
+			<array><string>tex</string><string>ltx</string><string>latex</string></array>
+			<key>LSItemContentTypes</key>
+			<array><string>org.tug.tex</string><string>public.tex</string></array>
+			<key>NSDocumentClass</key>
+			<string>TeXDocument</string>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>TeX Support File</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>CFBundleTypeExtensions</key>
+			<array><string>bib</string><string>sty</string><string>cls</string><string>bst</string><string>bbx</string><string>cbx</string><string>dtx</string></array>
+			<key>NSDocumentClass</key>
+			<string>TeXDocument</string>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>PDF Document</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array><string>com.adobe.pdf</string></array>
+			<key>NSDocumentClass</key>
+			<string>PDFReadDocument</string>
+		</dict>
+	</array>
+	<key>CFBundleExecutable</key>
+	<string>Galley</string>
+	<key>CFBundleIdentifier</key>
+	<string>io.github.pranil-sekuru.galley</string>
+	<key>CFBundleName</key>
+	<string>Galley</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>NSAccentColorName</key>
+	<string>AccentColor</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+</dict>
+</plist>
