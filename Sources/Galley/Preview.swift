@@ -7,6 +7,9 @@ final class PreviewView: PDFView {
     var fitting = true
     var onSyncEdit: ((Int, Double, Double) -> Void)?
     var onPageChange: (() -> Void)?
+    /// Pair mode: a plain click picks the paragraph under it.
+    var picking = false
+    var onPick: ((Int, Double, Double) -> Void)?
     private var refitting = false
 
     override init(frame: NSRect) {
@@ -80,6 +83,15 @@ final class PreviewView: PDFView {
     // MARK: SyncTeX
 
     override func mouseDown(with event: NSEvent) {
+        if picking, !event.modifierFlags.contains(.command), event.clickCount == 1, let doc = document {
+            let p = convert(event.locationInWindow, from: nil)
+            if let page = page(for: p, nearest: false) {
+                let q = convert(p, to: page)
+                let box = page.bounds(for: .mediaBox)
+                onPick?(doc.index(for: page), Double(q.x - box.minX), Double(box.maxY - q.y))
+                return
+            }
+        }
         if event.modifierFlags.contains(.command), let doc = document {
             let p = convert(event.locationInWindow, from: nil)
             if let page = page(for: p, nearest: true) {

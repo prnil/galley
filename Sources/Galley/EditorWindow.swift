@@ -2,7 +2,7 @@ import AppKit
 import PDFKit
 import UniformTypeIdentifiers
 
-enum Layout: Int { case source = 0, both = 1, pages = 2 }
+enum Layout: Int { case source = 0, both = 1, pages = 2, pair = 3 }
 
 extension NSToolbarItem.Identifier {
     static let gTitle = Self("galley.title")
@@ -164,7 +164,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSTool
     let split = PencilSplitView()
     let source = SourcePane()
     let preview = PreviewPane()
-    private let tabs = InkTabs(["Source", "Both", "Pages"], selected: 1)
+    private let tabs = InkTabs(["Source", "Both", "Pages", "Pair"], selected: 1)
     private let status = StatusMark()
     private let titleLabel = handLabel("", size: 16, bold: true)
     private var engineButton: InkButton!
@@ -177,6 +177,10 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSTool
     private var editsSinceRun = false
     private(set) var layoutMode: Layout = .both
     private var engineOverride: Engine?
+    /// Pair mode, made the first time it is opened and kept while the window lives
+    /// (it holds edited chapters until they are saved).
+    private(set) var pair: PairController?
+    var typesetterForPair: Typesetter? { typesetter }
     /// Snapshot runs wait on this.
     var onTypeset: ((TypesetResult) -> Void)?
 
@@ -225,12 +229,13 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSTool
         tv.onSync = { [weak self] line in self?.showInPDF(line: line) }
         doc.liveText = { [weak tv] in tv?.string ?? "" }
         preview.pdf.onSyncEdit = { [weak self] page, x, y in self?.syncEdit(page: page, x: x, y: y) }
+        preview.pdf.onPick = { [weak self] page, x, y in self?.pairPick(page: page, x: x, y: y) }
         source.issues.onPick = { [weak self] issue in self?.jump(to: issue) }
         source.issues.onClose = { [weak self] in self?.slipDismissed = true; self?.source.issues.clear() }
         tabs.onChange = { [weak self] i in self?.setLayout(Layout(rawValue: i) ?? .both) }
 
         let saved = UserDefaults.standard.object(forKey: "GalleyLayout") as? Int
-        let start: Layout = !doc.isTypesettable ? .source : Layout(rawValue: saved ?? 1) ?? .both
+        let start: Layout = !doc.isTypesettable ? .source : (Layout(rawValue: saved ?? 1).flatMap { $0 == .pair ? nil : $0 } ?? .both)
         setLayout(start, animated: false)
         updateTitle()
         updateFooter()
@@ -246,6 +251,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSTool
     }
     required init?(coder: NSCoder) { fatalError() }
     private var highlighter: TeXHighlighter?
+    private var shownMap: [SourceLine?]?
 
     override func windowDidLoad() { super.windowDidLoad() }
 
@@ -256,22 +262,44 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSTool
     func windowWillClose(_ notification: Notification) {
         timer?.invalidate()
         typesetter?.cancel()
+        pair?.stop()
         if let t = typesetter { try? FileManager.default.removeItem(at: t.dir) }
     }
 
     // MARK: Layout
 
     func setLayout(_ l: Layout, animated: Bool = true) {
+        if l == .pair && !doc.isTypesettable { NSSound.beep(); tabs.select(layoutMode.rawValue, animated: false); return }
+        let wasPair = layoutMode == .pair
         layoutMode = l
         tabs.select(l.rawValue, animated: animated)
         if doc.isTypesettable, !Prefs.probing { UserDefaults.standard.set(l.rawValue, forKey: "GalleyLayout") }
-        let showSource = l != .pages, showPages = l != .source && doc.isTypesettable
+        let showSource = l != .pages && l != .pair, showPages = l != .source && doc.isTypesettable
+        if l == .pair && pair == nil {
+            let p = PairController(wc: self)
+            pair = p
+            split.addArrangedSubview(p.pane)
+        }
         source.isHidden = !showSource
         preview.isHidden = !showPages
+        pair?.pane.isHidden = l != .pair
+        preview.pdf.picking = l == .pair
         split.adjustSubviews()
-        if showSource && showPages {
+        if l == .pair {
+            split.pendingFraction = 0.56
+            if split.bounds.width > 100 { split.layoutSubtreeIfNeeded(); split.setPosition(floor(split.bounds.width * 0.56), ofDividerAt: 1) }
+        } else if showSource && showPages {
             if split.bounds.width > 100 { split.setPosition(floor(split.bounds.width * 0.5), ofDividerAt: 0) }
             else { split.pendingFraction = 0.5 }
+        }
+        if wasPair && l != .pair { pair?.stop() }
+        if l == .pair && !wasPair {
+            // Set the whole document (chapters inlined) first, so the paragraph can be found on the pages.
+            pair?.pane.clear()
+            pair?.pane.note("Pair mode activated", color: Theme.green)
+            if animated { TagIntro.play(on: window?.screen) }
+            pendingPairStart = true
+            typeset(full: true)
         }
         split.needsLayout = true
         if showPages { preview.pdf.fitting = true; preview.pdf.needsLayout = true }
@@ -279,6 +307,21 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSTool
             Motion.rise(showPages && l == .pages ? preview.layer : source.sheet.layer, by: 10, dur: 0.4)
         }
         if showSource { window?.makeFirstResponder(source.text) }
+        if l == .pair, let p = pair { window?.makeFirstResponder(p.pane.field.textView) }
+    }
+    private var pendingPairStart = false
+    /// The source map of the run in flight (Pair mode typesets the flattened document).
+    private var runMap: [SourceLine?]?
+
+    private func pairPick(page: Int, x: Double, y: Double) {
+        guard let t = typesetter, let p = pair, p.active else { return }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let hit = t.syncEdit(page: page, x: x, y: y)
+            DispatchQueue.main.async {
+                guard let hit, hit.file == t.texCopy.path else { return }
+                p.picked(flatLine: hit.line)
+            }
+        }
     }
 
     func splitView(_ splitView: NSSplitView, constrainMinCoordinate proposed: CGFloat, ofSubviewAt i: Int) -> CGFloat { 300 }
@@ -408,11 +451,20 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSTool
         editsSinceRun = false
         status.set(.working)
         refreshEngine()
-        t.typeset(source.text.string, engine: engine, full: full) { [weak self] r in self?.finished(r) }
+        var text = source.text.string
+        var map: [SourceLine?]? = nil
+        if let p = pair, p.active || p.model.hasUnsavedChapters || layoutMode == .pair {
+            let f = p.flatten()
+            text = f.text
+            map = f.map
+        }
+        runMap = map
+        t.typeset(text, engine: engine, full: full) { [weak self] r in self?.finished(r, map: map) }
     }
 
-    private func finished(_ r: TypesetResult) {
+    private func finished(_ r: TypesetResult, map: [SourceLine?]? = nil) {
         busy = false
+        shownMap = map
         var r = r
         if let pdf = r.pdf {
             preview.load(pdf)
@@ -427,8 +479,14 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSTool
         last = r
         status.set(r.errors.isEmpty && r.pdf != nil ? .ok : .failed)
         let main = typesetter?.texCopy.path ?? ""
-        source.text.errorLines = Set(r.errors.filter { $0.file == main }.compactMap(\.line))
-        source.text.warningLines = Set(r.warnings.filter { $0.file == main && $0.kind == .warning }.compactMap(\.line))
+        func toMain(_ l: Int?) -> Int? {
+            guard let l else { return nil }
+            guard let map else { return l }
+            guard l >= 1, l - 1 < map.count, let s = map[l - 1], s.file == pair?.model.mainKey else { return nil }
+            return s.line
+        }
+        source.text.errorLines = Set(r.errors.filter { $0.file == main }.compactMap { toMain($0.line) })
+        source.text.warningLines = Set(r.warnings.filter { $0.file == main && $0.kind == .warning }.compactMap { toMain($0.line) })
         if r.errors.isEmpty {
             source.issues.clear()
             slipDismissed = false
@@ -436,6 +494,13 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSTool
             source.issues.show(r.errors, mainFile: main)
         }
         updateFooter()
+        if let p = pair, let map {
+            p.didTypeset(map: map, issues: r.issues)
+            if pendingPairStart, layoutMode == .pair {
+                pendingPairStart = false
+                p.start()
+            }
+        }
         onTypeset?(r)
         if let full = again {
             again = nil
@@ -521,7 +586,15 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSTool
             let hit = t.syncEdit(page: page, x: x, y: y)
             DispatchQueue.main.async { [weak self] in
                 guard let self, let hit else { NSSound.beep(); return }
-                if hit.file == t.texCopy.path {
+                if hit.file == t.texCopy.path, let map = self.shownMap {
+                    guard hit.line >= 1, hit.line - 1 < map.count, let s = map[hit.line - 1] else { NSSound.beep(); return }
+                    if s.file == self.pair?.model.mainKey {
+                        if self.layoutMode == .pages || self.layoutMode == .pair { self.setLayout(.both) }
+                        self.source.text.reveal(line: s.line)
+                    } else {
+                        self.open(file: s.file, line: s.line)
+                    }
+                } else if hit.file == t.texCopy.path {
                     if self.layoutMode == .pages { self.setLayout(.both) }
                     self.source.text.reveal(line: hit.line)
                 } else {
@@ -535,6 +608,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSTool
 
     func documentSaved() {
         updateTitle()
+        pair?.saved()
         if Prefs.pdfBesideOnSave, let src = doc.fileURL, let pdf = typesetter?.pdf, FileManager.default.fileExists(atPath: pdf.path) {
             let dest = src.deletingPathExtension().appendingPathExtension("pdf")
             try? FileManager.default.removeItem(at: dest)
@@ -570,6 +644,11 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSTool
     @objc func layoutSource(_ s: Any?) { setLayout(.source) }
     @objc func layoutBoth(_ s: Any?) { setLayout(.both) }
     @objc func layoutPages(_ s: Any?) { setLayout(.pages) }
+    @objc func layoutPair(_ s: Any?) { setLayout(.pair) }
+    @objc func pairNext(_ s: Any?) { pair?.goNext() }
+    @objc func pairBack(_ s: Any?) { pair?.goBack() }
+    @objc func pairNextPage(_ s: Any?) { pair?.goNextPage() }
+    @objc func pairUndo(_ s: Any?) { pair?.undoChange() }
     @objc func zoomInPages(_ s: Any?) { preview.pdf.zoomIn(s); preview.pdf.fitting = false }
     @objc func zoomOutPages(_ s: Any?) { preview.pdf.zoomOut(s); preview.pdf.fitting = false }
     @objc func fitPages(_ s: Any?) { preview.pdf.refit() }
@@ -593,6 +672,9 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSTool
         case #selector(layoutSource(_:)): item.state = layoutMode == .source ? .on : .off
         case #selector(layoutBoth(_:)): item.state = layoutMode == .both ? .on : .off; return doc.isTypesettable
         case #selector(layoutPages(_:)): item.state = layoutMode == .pages ? .on : .off; return doc.isTypesettable
+        case #selector(layoutPair(_:)): item.state = layoutMode == .pair ? .on : .off; return doc.isTypesettable
+        case #selector(pairNext(_:)), #selector(pairBack(_:)), #selector(pairNextPage(_:)), #selector(pairUndo(_:)):
+            return layoutMode == .pair && (pair?.active ?? false)
         case #selector(toggleNumbers(_:)): item.state = source.text.showsNumbers ? .on : .off
         case #selector(toggleLive(_:)): item.state = Prefs.liveTypeset ? .on : .off
         case #selector(togglePDFBeside(_:)): item.state = Prefs.pdfBesideOnSave ? .on : .off

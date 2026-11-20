@@ -154,11 +154,21 @@ enum MainMenu {
             item("Open Typesetting Cache", #selector(AppDelegate.openTeXLog(_:)), target: d),
         ])
 
+        sub("Pair", [
+            item("Pair with Claude", #selector(EditorWindowController.layoutPair(_:)), "4"),
+            .separator(),
+            item("Next Paragraph", #selector(EditorWindowController.pairNext(_:)), String(UnicodeScalar(NSDownArrowFunctionKey)!), [.command, .option]),
+            item("Previous Paragraph", #selector(EditorWindowController.pairBack(_:)), String(UnicodeScalar(NSUpArrowFunctionKey)!), [.command, .option]),
+            item("Next Page", #selector(EditorWindowController.pairNextPage(_:)), String(UnicodeScalar(NSPageDownFunctionKey)!), [.command, .option]),
+            item("Undo Claude's Change", #selector(EditorWindowController.pairUndo(_:)), "z", [.command, .option]),
+        ])
+
         let enterFS = item("Enter Full Screen", #selector(NSWindow.toggleFullScreen(_:)), "f", [.command, .control])
         sub("View", [
             item("Source", #selector(EditorWindowController.layoutSource(_:)), "1"),
             item("Source and Pages", #selector(EditorWindowController.layoutBoth(_:)), "2"),
             item("Pages", #selector(EditorWindowController.layoutPages(_:)), "3"),
+            item("Pair with Claude", #selector(EditorWindowController.layoutPair(_:)), "4"),
             .separator(),
             item("Zoom In", #selector(EditorWindowController.zoomInPages(_:)), "="),
             item("Zoom Out", #selector(EditorWindowController.zoomOutPages(_:)), "-"),
@@ -220,6 +230,38 @@ enum Snapshot {
             }
             guard let wc = d.windowControllers.first as? EditorWindowController else { exit(1) }
             if let l = opt("layout").flatMap(Int.init).flatMap(Layout.init) { wc.setLayout(l, animated: false) }
+            if let wait = opt("pairwait").flatMap(Double.init) {
+                wc.setLayout(.pair, animated: args.contains("motion"))
+                if let t = opt("tagshot").flatMap(Double.init) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + t) { capture(TagIntro.window, to: out) }
+                }
+                var steps = Int(opt("pairsteps") ?? "") ?? 0
+                var said = false
+                wc.onTypeset = { r in print("typeset: pdf=\(r.pdf != nil) errors=\(r.errors.count) \(String(format: "%.2f", r.seconds))s") }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    guard let p = wc.pair else { return }
+                    var paged = false
+                    p.onIdle = {
+                        if let pg = opt("pairpage").flatMap(Int.init), !paged { paged = true; p.goToPage(pg - 1); return }
+                        if let say = opt("pairsay"), !said { said = true; p.authorSays(say); return }
+                        if steps > 0 { steps -= 1; p.goNext(); return }
+                        if args.contains("pairsave") && wc.doc.isDocumentEdited {
+                            wc.doc.save(withDelegate: nil, didSave: nil, contextInfo: nil)
+                            print("saved; chapters pending: \(p.model.hasUnsavedChapters)")
+                        }
+                    }
+                }
+                if let draft = opt("pairdraft") {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + wait - 1) { wc.pair?.pane.field.text = draft.replacingOccurrences(of: "\\n", with: "\n") }
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + wait) {
+                    print("---- transcript\n" + (wc.pair?.pane.transcript.string ?? "") + "\n---- place: " + (wc.pair?.pane.place.stringValue ?? ""))
+                    if let p = wc.pair { print("paragraphs: \(p.paragraphs.count) current: \(p.current)") }
+                    capture(wc.window, to: out)
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + wait + 20) { exit(1) }
+                return
+            }
             var actedType = false
             wc.onTypeset = { r in
                 print("typeset: pdf=\(r.pdf != nil) pages=\(r.pages) errors=\(r.errors.count) warnings=\(r.warnings.count) \(String(format: "%.2f", r.seconds))s")
@@ -243,7 +285,7 @@ enum Snapshot {
                 DispatchQueue.main.asyncAfter(deadline: .now() + shot) { capture(wc.window, to: out) }
             }
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 60) { print("snapshot: timed out"); exit(1) }
+        if opt("pairwait") == nil { DispatchQueue.main.asyncAfter(deadline: .now() + 60) { print("snapshot: timed out"); exit(1) } }
     }
 
     static func capture(_ window: NSWindow?, to path: String) {

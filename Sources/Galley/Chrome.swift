@@ -202,14 +202,18 @@ final class PencilSplitView: NSSplitView {
     override func layout() {
         super.layout()
         guard subviews.count > 1 else { return }
-        if let f = pendingFraction, bounds.width > 100, !subviews[0].isHidden, !subviews[1].isHidden {
+        let shown = subviews.filter { !$0.isHidden }
+        if let f = pendingFraction, bounds.width > 100, shown.count > 1, let i = subviews.firstIndex(of: shown[0]) {
             pendingFraction = nil
-            setPosition(floor(bounds.width * f), ofDividerAt: 0)
+            // The divider after the first visible pane (hidden panes sit at zero width before it).
+            let d = subviews.firstIndex(of: shown[1])! - 1
+            _ = i
+            setPosition(floor(bounds.width * f), ofDividerAt: d)
         }
-        let left = subviews[0]
+        let left = shown.first ?? subviews[0]
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        pencil.isHidden = left.isHidden || subviews[1].isHidden
+        pencil.isHidden = shown.count < 2
         pencil.frame = NSRect(x: left.frame.maxX + 2, y: bounds.height * 0.08, width: 5, height: bounds.height * 0.84)
         pencil.zPosition = 10
         CATransaction.commit()
